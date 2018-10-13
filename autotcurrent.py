@@ -1,136 +1,158 @@
 from binance.client import Client
 from binance.websockets import BinanceSocketManager
 import math
+import csv
 from collections import deque
+import threading
+import winsound
+import time
+class updater(threading.Thread):
+	
+	def __init__(self, s):
+		self.client = Client("","")
+		self.botTrades = list()
+		self.SMA = deque()
+		self.token = s
+		self.balanceETH = 1.0
+		self.balanceCoin = 1
+		self.signal = 0.0
+		self.avgGain = 0.0
+		self.avgLoss = 0.0 
+		self.lastTime = 0
+		self.lastOpen = 0.0
+		self.lastClose = 0.0
+		self.MACDAboveSignal = bool
+		self.change = 0.0
+		self.lastChange = 0.0
+		self.lastValue = 0.0
+		self.MACD = 0.0
+		self.updates = 0.0
+		self.token = s
+		self.klines = self.client.get_historical_klines(self.token, Client.KLINE_INTERVAL_1MINUTE, "30 minutes ago UTC")
+		self.klinesRSI = self.client.get_historical_klines(self.token, Client.KLINE_INTERVAL_1MINUTE, "250 minutes ago UTC")
+		self.signal = deque()
+		self.RSItracker = deque()
+		self.initRSI() #RSI6
+		self.initMACD()
+		self.bm = BinanceSocketManager(self.client)
+		self.conn_key = self.bm.start_kline_socket(self.token, self.process_message)
+		self.bm.start()
+		with open('decimals.csv') as csvfile:
+			reader = csv.DictReader(csvfile)
+			for row in reader:
+				if (row['token'] == self.token):
+					self.decimals = row['decimals']
+		
 
-class updater:
-	updates = 0.0
-	RSI = 0.0
-	client = Client("","") #Api keys go here
-	MACD = 0.0
-	balanceETH = 1.0
-	balanceCoin = 18600
-	signal = deque()
-	SMA = deque()
-	avgGain = 0.0
-	avgLoss = 0.0 
-	botTrades = list()
-	lastTime = 0
-	lastOpen = 0.0
-	lastClose = 0.0
-	MACDAboveSignal = None
-	change = 0.0
-	lastChange = 0.0
-	RSItracker = deque()
-	klines = client.get_historical_klines('TRXETH', Client.KLINE_INTERVAL_1MINUTE, "30 minutes ago UTC")
-	klinesRSI = client.get_historical_klines('TRXETH', Client.KLINE_INTERVAL_1MINUTE, "250 minutes ago UTC")
-	def __init__(self):
-		updater.initRSI() #RSI6
-		updater.initMACD()
-	def process_message(msg):
+	def process_message(self, msg):
 	#this basically updates everytime theres a new push from the server -- 
 	#whenever a kline for the next time period is reached, it updates the RSI and MACD based on the last recieved value
 		time = float(msg['k']['t'])
-		if time > updater.lastTime:
-			if (updater.lastOpen == 0.0 and updater.lastClose == 0.0):
-				updater.lastOpen = float(msg['k']['o'])
-				updater.lastClose = float(msg['k']['c'])
-			updater.lastTime = time
-			updater.updates += 1
-			updater.updateMetrics() ##only runs update metrics after the time is confirmed
-			updater.updateTracker()
-			if ((updater.RSI > 60 and updater.MACDAboveSignal == False and updater.balanceCoin> 0) or (updater.RSI > 70 and updater.balanceCoin > 0)):
-				market = updater.client.get_symbol_ticker() ## takes all symbol data and searches for TRX
-				price = 0.0
-				for value in market:
-					if 'TRXETH' in value['symbol']:
-						price = float(value['price'])
-				if len(updater.botTrades) == 0: #since the equivalent price of TRX for 1 ETH varies, this makes it so that the original price is always equivalent to 1 ETH
-					updater.balanceCoin = 1/price
-				formerTRX = updater.balanceCoin
-				updater.balanceETH = updater.balanceCoin*price
-				updater.balanceCoin = 0
-				updater.botTrades.append("Acquired " + str(updater.balanceETH) + " ETH for " + str(formerTRX)+ " TRX at " +str(price)  + " TRX/ETH")
-				updater.change = updater.balanceETH - 1
-				updater.lastChange = updater.balanceETH - updater.lastChange
-			if ((updater.RSI < 40 and updater.MACDAboveSignal == True and updater.balanceETH > 0) or (updater.RSI < 25 and updater.balanceETH > 0)):
-				market = updater.client.get_symbol_ticker() ## takes all symbol data and searches for TRX
-				price = 0.0
-				for value in market:
-					if 'TRXETH' in value['symbol']:
-						price = float(value['price'])
-				formerETH = updater.balanceETH
-				updater.balanceCoin = updater.balanceETH/price
-				updater.balanceETH = 0
-				updater.botTrades.append("Acquired " + str(updater.balanceCoin) + " TRX for " + str(formerETH)+ " ETH at " +str(price)  + " TRX/ETH")
-				updater.change = (updater.balanceCoin*price) - 1
-				updater.lastChange = (updater.balanceCoin*price) - updater.lastChange
-			if len(updater.botTrades) > 0:
-				for value in updater.botTrades:
+		if time > self.lastTime:
+			print(self.token)
+			if (self.lastOpen == 0.0 and self.lastClose == 0.0):
+				self.lastOpen = float(msg['k']['o'])
+				self.lastClose = float(msg['k']['c'])
+			self.lastTime = time
+			self.updates += 1
+			self.updateMetrics() ##only runs update metrics + tracker after the time is confirmed
+			self.updateTracker()
+			if self.RSI > 62.5:
+				winsound.PlaySound('oh.wav', winsound.SND_FILENAME)
+			if self.RSI < 20:
+				winsound.PlaySound('uwaa.wav', winsound.SND_FILENAME)
+			market = self.client.get_symbol_ticker() ## takes all symbol data and searches for TRX
+			for value in market:
+				if self.token in value['symbol']:
+					price = float(value['price'])
+			if (((self.RSI > 65 and self.MACDAboveSignal == False and self.balanceCoin> 0) or (self.RSI > 72.5 and self.balanceCoin > 0)) and (self.lastValue < (self.balanceCoin*price)) and (self.updates > 9)):	
+				if len(self.botTrades) == 0: #since the equivalent price of TRX for 1 ETH varies, this makes it so that the original price is always equivalent to 1 ETH
+					self.balanceCoin = 1/price
+				formerTRX = self.balanceCoin
+				self.balanceETH = self.balanceCoin*price
+				self.balanceCoin = 0
+				self.lastValue = self.balanceETH
+				self.botTrades.append("Acquired " + str(self.balanceETH) + " ETH for " + str(formerTRX) + " " + self.token[0:3] +  " at " + str(price) + " " + self.token[0:3] + "/ETH")
+				self.change = self.balanceETH - 1
+				self.lastChange = self.balanceETH - self.lastChange
+			if ((self.RSI < 32.5 and self.MACDAboveSignal == True and self.balanceETH > 0) or (self.RSI < 25 and self.balanceETH > 0)):
+				formerETH = self.balanceETH
+				self.balanceCoin = self.balanceETH/price
+			
+				self.balanceETH = 0
+				self.botTrades.append("Acquired " + str(self.balanceCoin) +" " +  self.token[0:3] + " for " + str(formerETH)+ " ETH at " +str(price)  + " " + self.token[0:3] + "/ETH")
+				self.lastValue = self.balanceCoin*price
+				self.change = (self.balanceCoin*price) - 1
+				self.lastChange = (self.balanceCoin*price) - self.lastChange
+			if len(self.botTrades) > 0:
+				for value in self.botTrades:
 					print(value)
-				print("ETH Balance: ", str(updater.balanceETH), "TRX Balance: ", str(updater.balanceCoin))
-				print("Portfolio change from start: ", str(updater.change), " ETH")
-				print("Portfolio change since last trade: ", str(updater.lastChange), " ETH \n")
+				print("ETH Balance: ", str(self.balanceETH), " " + self.token[0:3] + " Balance: ", str(self.balanceCoin))
+				print("Portfolio change from start: ", str(self.change), " ETH")
+				print("Portfolio change since last trade: ", str(self.lastChange), " ETH \n")
 		#this updates for every call
-		updater.lastOpen = float(msg['k']['o'])
-		updater.lastClose = float(msg['k']['c'])
+		self.lastOpen = float(msg['k']['o'])
+		self.lastClose = float(msg['k']['c'])
 
-	def initRSI(): ## THIS USES RSI 6
+	def initRSI(self): ## THIS USES RSI 6
+		print(self.token)
 		count = 0
 		tempLoss = 0.0
 		tempGain = 0.0
-		for value in updater.klinesRSI:
+		for value in self.klinesRSI:
 			opens = float(value[4])
 			close = float(value [1])
+			if opens == close:
+				continue
 			if opens > close:
 				tempLoss += (opens - close)
 			else:
 				tempGain += (close - opens)
 			count += 1
 			if count == 6:
-				updater.avgGain = tempGain/6
-				updater.avgLoss = tempLoss/6
-				updater.RSI = 100 - (100/ (1 + (updater.avgGain/updater.avgLoss)))
+				self.avgGain = tempGain/6
+				self.avgLoss = tempLoss/6
+				self.RSI = 100 - (100/ (1 + (self.avgGain/self.avgLoss)))
 			if count > 6:
 				if opens > close:
-					updater.avgLoss = ((updater.avgLoss*5)+(opens - close))/6
+					self.avgLoss = ((self.avgLoss*5)+(opens - close))/6
 				else:
-					updater.avgGain = ((updater.avgGain*5)+(close - opens))/6
-				updater.RSI = 100 - (100/ (1 + (updater.avgGain/updater.avgLoss)))
-		print("RSI initialized at ", updater.RSI)
+					self.avgGain = ((self.avgGain*5)+(close - opens))/6
+				self.RSI = 100 - (100/ (1 + (self.avgGain/self.avgLoss)))
+		print("RSI initialized at ", self.RSI)
 		
-	def updateMetrics(): 
+	def updateMetrics(self): 
 		#RSI update
-		if updater.lastOpen > updater.lastClose:
-			updater.avgLoss = ((updater.avgLoss*5)+(updater.lastOpen - updater.lastClose))/6
+		if self.lastOpen > self.lastClose:
+			self.avgLoss = ((self.avgLoss*5)+(self.lastOpen - self.lastClose))/6
 		else:
-			updater.avgGain = ((updater.avgGain*5)+(updater.lastClose - updater.lastOpen))/6
+			self.avgGain = ((self.avgGain*5)+(self.lastClose - self.lastOpen))/6
 		
-		updater.RSI = 100 - (100/ (1 + (updater.avgGain/updater.avgLoss)))
+		self.RSI = 100 - (100/ (1 + (self.avgGain/self.avgLoss)))
 
 		#MACD update
-		updater.SMA.append(updater.lastClose)
-		EMA12 = updater.SMA[(len(updater.SMA)-1)] - (((math.fsum(updater.SMA)-(updater.SMA[(len(updater.SMA)-1)]))/len(updater.SMA)) * (2/13)) + (((math.fsum(updater.SMA)-(updater.SMA[(len(updater.SMA)-1)]))/len(updater.SMA)))
-		EMA26 = updater.SMA[(len(updater.SMA)-1)] - (((math.fsum(updater.SMA)-(updater.SMA[(len(updater.SMA)-1)]))/len(updater.SMA)) * (2/27)) + (((math.fsum(updater.SMA)-(updater.SMA[(len(updater.SMA)-1)]))/len(updater.SMA)))
-		updater.MACD = EMA12 - EMA26
-		updater.signal.append(updater.MACD)
-		print("New MACD: ",updater.MACD, "  New RSI: ", updater.RSI)
-		if len(updater.signal) > 9:
-			updater.signal.popleft()
-		if len(updater.SMA) > 250:
-			updater.SMA.popleft()
-		if len(updater.signal) == 9:
-			print("Signal line at: ", math.fsum(updater.signal)/9)
-			if sum(updater.signal)/9 > updater.MACD: 
-				updater.MACDAboveSignal = False
+		self.SMA.append(self.lastClose)
+		EMA12 = self.SMA[(len(self.SMA)-1)] - (((math.fsum(self.SMA)-(self.SMA[(len(self.SMA)-1)]))/len(self.SMA)) * (2/13)) + (((math.fsum(self.SMA)-(self.SMA[(len(self.SMA)-1)]))/len(self.SMA)))
+		EMA26 = self.SMA[(len(self.SMA)-1)] - (((math.fsum(self.SMA)-(self.SMA[(len(self.SMA)-1)]))/len(self.SMA)) * (2/27)) + (((math.fsum(self.SMA)-(self.SMA[(len(self.SMA)-1)]))/len(self.SMA)))
+		self.MACD = EMA12 - EMA26
+		self.signal.append(self.MACD)
+		print("New MACD: ",self.MACD, "  New RSI: ", self.RSI)
+		if len(self.signal) > 9:
+			self.signal.popleft()
+		if len(self.SMA) > 250:
+			self.SMA.popleft()
+		if len(self.signal) == 9:
+			print("Signal line at: ", math.fsum(self.signal)/9)
+			if sum(self.signal)/9 > self.MACD: 
+				self.MACDAboveSignal = False
 			else:
-				updater.MACDAboveSignal = True
-			print("MACD above signal line? ", updater.MACDAboveSignal)
-		print("Open and Close entered at ", updater.lastOpen, updater.lastClose)
+				self.MACDAboveSignal = True
+			print("MACD above signal line? ", self.MACDAboveSignal)
+		print("Open and Close entered at ", self.lastOpen, self.lastClose)
 
-	def updateTracker():
-		updater.RSItracker.append(updater.RSI)
-		if updater.updates % 20 == 0:
+	def updateTracker(self):
+		self.RSItracker.append(self.RSI)
+		if self.updates % 20 == 0:
 			sub20 = 0
 			to30 = 0
 			to40 = 0
@@ -139,7 +161,7 @@ class updater:
 			to70 = 0
 			to80 = 0
 			super80 = 0
-			for value in updater.RSItracker:
+			for value in self.RSItracker:
 				if value < 20 :
 					sub20 += 1
 				elif value < 30:
@@ -166,24 +188,46 @@ class updater:
 			print("60-69 RSI: ", to70)
 			print("70-79 RSI: ", to80)
 			print(">80 RSI: ", super80)
-		if len(updater.RSItracker) > 200:
-			updater.RSItracker.popleft()
-		
-	def initMACD():
-		for value in updater.klines:
-			updater.SMA.append(float(value[4]))
-		EMA12 = updater.SMA[29] - (((math.fsum(updater.SMA)-(updater.SMA[29]))/len(updater.SMA)) * (2/13)) + (((math.fsum(updater.SMA)-(updater.SMA[29]))/len(updater.SMA)))
-		EMA26 = updater.SMA[29] - (((math.fsum(updater.SMA)-(updater.SMA[29]))/len(updater.SMA)) * (2/27)) + (((math.fsum(updater.SMA)-(updater.SMA[29]))/len(updater.SMA)))
-		updater.MACD = EMA12 - EMA26
-		updater.signal.append(updater.MACD)
-		print("MACD initialized at ", updater.MACD)
+		if len(self.RSItracker) > 200:
+			self.RSItracker.popleft()
 
-updater()
-bm = BinanceSocketManager(updater.client)
-conn_key = bm.start_kline_socket('TRXETH', updater.process_message)
-bm.start()
+	def initMACD(self):
+		for value in self.klines:
+			self.SMA.append(float(value[4]))
+		EMA12 = self.SMA[29] - (((math.fsum(self.SMA)-(self.SMA[29]))/len(self.SMA)) * (2/13)) + (((math.fsum(self.SMA)-(self.SMA[29]))/len(self.SMA)))
+		EMA26 = self.SMA[29] - (((math.fsum(self.SMA)-(self.SMA[29]))/len(self.SMA)) * (2/27)) + (((math.fsum(self.SMA)-(self.SMA[29]))/len(self.SMA)))
+		self.MACD = EMA12 - EMA26
+		self.signal.append(self.MACD)
+		print("MACD initialized at ", self.MACD)
 
+	def calcProfit(self, p): #calculates the correct sell price for everything
+		d = 2 # neo
+		p = 0.03 # profit margin(percent)
+		self.balanceETH = 1 #
+		price = 0.129474 # test, using NEO
+		actualBuy = (self.balanceETH -(self.balanceETH * 0.0005)) # actual buy amount after you account for buy fee, in ETH
+		amtSell = math.floor((actualBuy/price) *(10**d))/float(10**d) # represents amount sellable, in the currency
+		target = ((actualBuy *(1+p))+(actualBuy*0.0005))/amtSell
+		 
+		print(actualBuy)
+		print(amtSell)
+		print(target)
 
+client = Client("","")
+temp = client.get_ticker()
+x = list()
+print("Starting initialization")
+for value in temp:
+	if ((float(value['quoteVolume']) > 5000) and ('ETH' in value['symbol'][3:7])):
+		try:
+			y = updater(value['symbol'])
+			x.append(y)
+			time.sleep(10)
+		except Exception as e:
+			print("memed on")
+print("****************")
+print("Initialization complete. ")
+print("****************")
 '''[
     [
 
